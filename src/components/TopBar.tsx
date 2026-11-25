@@ -1,4 +1,6 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 
 export type WorkspaceTab = 'desk' | 'feed' | 'backtest' | 'risk';
 
@@ -22,6 +24,9 @@ export const TopBar: React.FC<TopBarProps> = ({
   onAnalyzeSetup,
   isAnalyzing,
 }) => {
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
+
   return (
     <header className="sticky top-0 z-30 border-b border-slate-800/80 bg-[#0B1120]/95 backdrop-blur-sm">
       <div className="mx-auto flex h-14 max-w-[1440px] items-center justify-between gap-8 px-4 sm:px-6">
@@ -65,8 +70,8 @@ export const TopBar: React.FC<TopBarProps> = ({
           })}
         </nav>
 
-        {/* Zone 3: Single primary action */}
-        <div className="flex items-center shrink-0">
+        {/* Zone 3: Actions + User Profile */}
+        <div className="flex items-center gap-3 shrink-0">
           <button
             type="button"
             onClick={onAnalyzeSetup}
@@ -75,6 +80,24 @@ export const TopBar: React.FC<TopBarProps> = ({
           >
             {isAnalyzing ? 'Grading Setup...' : 'Grade With AI'}
           </button>
+
+          {user && (
+            <div className="flex items-center gap-2 pl-2 border-l border-slate-800">
+              <img
+                src={user.photoURL || "/favicon.png"}
+                alt=""
+                className="h-7 w-7 rounded-full border border-slate-700 object-cover"
+                referrerPolicy="no-referrer"
+              />
+              <button
+                type="button"
+                onClick={() => logout().then(() => navigate("/"))}
+                className="text-xs font-medium text-slate-400 hover:text-slate-200 transition-colors whitespace-nowrap"
+              >
+                Sign Out
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </header>

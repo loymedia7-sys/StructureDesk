@@ -1,4 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { logEvent } from './lib/tracking';
+import RequireAdmin from './components/RequireAdmin';
+import RequireAuth from './components/RequireAuth';
+import { Navbar } from './components/Navbar';
+import { Home } from './pages/Home';
+import { About } from './pages/About';
+import { Login } from './pages/Login';
+import Admin from './pages/Admin';
+import { AdminLogin } from './pages/AdminLogin';
 import { TopBar, type WorkspaceTab } from './components/TopBar';
 import {
   SMCCandleChart,
@@ -47,7 +58,17 @@ const DEFAULT_RISK_SETTINGS: RiskSettings = {
   maxOpenSignals: 3,
 };
 
-export default function App() {
+function VisitTracker() {
+  const location = useLocation();
+  const { user } = useAuth();
+  useEffect(() => {
+    logEvent('visit', user?.uid ?? null);
+  }, [location.pathname, user?.uid]);
+  return null;
+}
+
+function WorkspaceView() {
+  const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('desk');
   const [symbol, setSymbol] = useState<MarketSymbol>('XAUUSD');
   const [timeframe, setTimeframe] = useState<Timeframe>('5m');
@@ -78,7 +99,7 @@ export default function App() {
         };
       }
     } catch {
-      // ignore storage failure
+      // ignore
     }
     return DEFAULT_CSNR_RULE;
   });
@@ -87,7 +108,7 @@ export default function App() {
     try {
       localStorage.setItem(CSNR_STORAGE_KEY, JSON.stringify(csnrRule));
     } catch {
-      // ignore storage failure
+      // ignore
     }
   }, [csnrRule]);
 
@@ -99,7 +120,6 @@ export default function App() {
     dealingRange: true,
   });
 
-  // Initialize synchronously with deterministic closed candles so first paint is immediate
   const initialDataset = useMemo(
     () =>
       generateInstitutionalDataset({
@@ -122,7 +142,6 @@ export default function App() {
   const [signals, setSignals] = useState<PersistedSignal[]>([]);
   const [riskSettings, setRiskSettings] = useState<RiskSettings>(DEFAULT_RISK_SETTINGS);
 
-  // Load persisted signals on mount
   useEffect(() => {
     fetch('/api/signals')
       .then((res) => (res.ok ? res.json() : null))
@@ -131,12 +150,9 @@ export default function App() {
           setSignals(data.signals);
         }
       })
-      .catch(() => {
-        // Ignore network transient errors on initial load
-      });
+      .catch(() => {});
   }, []);
 
-  // Subscribe to real-time SSE market stream whenever feedMode === 'live'
   useEffect(() => {
     if (feedMode !== 'live') {
       setStreamConnected(false);
@@ -181,7 +197,7 @@ export default function App() {
         setLastTickTime(typeof data.serverTime === 'number' ? data.serverTime : Date.now());
         setFeedWarning(null);
       } catch {
-        // Ignore malformed snapshot frame
+        // ignore
       }
     });
 
@@ -207,7 +223,7 @@ export default function App() {
           });
         }
       } catch {
-        // Ignore malformed tick frame
+        // ignore
       }
     });
 
@@ -226,7 +242,7 @@ export default function App() {
         if (Array.isArray(data.mtfCandles)) setMtfCandles(data.mtfCandles);
         if (Array.isArray(data.htfCandles)) setHtfCandles(data.htfCandles);
       } catch {
-        // Ignore malformed fallback frame
+        // ignore
       }
       eventSource.close();
     });
@@ -242,7 +258,6 @@ export default function App() {
     };
   }, [feedMode, symbol, timeframe]);
 
-  // Fetch replay candles when feedMode === 'replay'
   const loadCandles = useCallback(
     async (
       targetSymbol: MarketSymbol,
@@ -342,7 +357,6 @@ export default function App() {
     setActiveTab('desk');
   };
 
-  // Run pure deterministic ICT/SMC engine over current closed candles
   const evaluation = useMemo(() => {
     return evaluateMultiTimeframeSetup({
       symbol,
@@ -358,12 +372,13 @@ export default function App() {
     setActiveTab('desk');
     if (!evaluation.setup) {
       setAiError(
-        'No active ICT setup detected on the current closed candles. Switch timeframe, replay scenario, or wait for the next candle close.'
+        'No active ICT setup detected on current closed candles. Switch timeframe or scenario.'
       );
       return;
     }
     setIsAnalyzing(true);
     setAiError(null);
+    logEvent('analysis', user?.uid ?? null, { symbol });
 
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), 35000);
@@ -387,7 +402,7 @@ export default function App() {
         try {
           data = JSON.parse(rawBody) as Record<string, unknown>;
         } catch {
-          // Non-JSON response (e.g. proxy timeout HTML page)
+          // ignore
         }
       }
 
@@ -395,18 +410,18 @@ export default function App() {
         const serverErr =
           data && typeof data.error === 'string' && data.error.trim()
             ? data.error
-            : `AI grading failed (HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''}). Please retry.`;
+            : `AI grading failed (HTTP ${res.status}). Please retry.`;
         throw new Error(serverErr);
       }
 
       if (!data) {
-        throw new Error('AI service returned an empty or invalid response. Please retry.');
+        throw new Error('AI service returned an empty response. Please retry.');
       }
 
       setAiResult(data as unknown as AIAnalysisResult);
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
-        setAiError('AI analysis timed out after 35 seconds. Please click Retry AI Grading.');
+        setAiError('AI analysis timed out after 35 seconds. Please click Retry.');
       } else {
         setAiError(
           err instanceof Error ? err.message : 'Unable to reach AI analysis service.'
@@ -431,7 +446,7 @@ export default function App() {
         return;
       }
     } catch {
-      // Fallback to local state if API unavailable
+      // fallback
     }
     setSignals((prev) => [signal, ...prev.filter((s) => s.id !== signal.id)]);
   };
@@ -448,7 +463,7 @@ export default function App() {
         body: JSON.stringify({ status }),
       });
     } catch {
-      // Optimistic update preserved
+      // ignore
     }
   };
 
@@ -459,7 +474,7 @@ export default function App() {
         method: 'DELETE',
       });
     } catch {
-      // Optimistic delete preserved
+      // ignore
     }
   };
 
@@ -480,7 +495,7 @@ export default function App() {
   const recentSweeps = ltfAnalysis.sweeps.length;
 
   return (
-    <div className="min-h-screen bg-[#0B1120] text-slate-100">
+    <div className="space-y-6">
       <TopBar
         activeTab={activeTab}
         onSelectTab={setActiveTab}
@@ -490,287 +505,287 @@ export default function App() {
 
       <main className="mx-auto max-w-[1440px] px-4 py-6 sm:px-6">
         <div className={activeTab === 'desk' ? 'space-y-6' : 'hidden'}>
-            {/* Workspace Toolbar */}
-            <div className="flex flex-col gap-3 border-b border-slate-800 pb-4 lg:flex-row lg:items-center lg:justify-between">
-              <div className="flex flex-wrap items-center gap-3">
-                {/* Symbol Selector */}
-                <div
-                  role="group"
-                  aria-label="Select trading symbol"
-                  className="flex items-center gap-1 rounded-md border border-slate-800 bg-[#0F172A] p-1"
-                >
-                  {SYMBOLS.map((sym) => (
-                    <button
-                      key={sym}
-                      type="button"
-                      onClick={() => handleSelectSymbol(sym)}
-                      className={`rounded px-2.5 py-1 text-xs font-mono font-medium transition-colors whitespace-nowrap shrink-0 ${
-                        symbol === sym
-                          ? 'bg-slate-800 text-sky-400'
-                          : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      {sym}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Timeframe Selector */}
-                <div
-                  role="group"
-                  aria-label="Select entry timeframe"
-                  className="flex items-center gap-1 rounded-md border border-slate-800 bg-[#0F172A] p-1"
-                >
-                  {TIMEFRAMES.map((tf) => (
-                    <button
-                      key={tf}
-                      type="button"
-                      onClick={() => handleSelectTimeframe(tf)}
-                      className={`rounded px-2.5 py-1 text-xs font-mono font-medium transition-colors whitespace-nowrap shrink-0 ${
-                        timeframe === tf
-                          ? 'bg-slate-800 text-slate-100'
-                          : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      {tf}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Live Stream / Replay Segmented Switch */}
-                <div
-                  role="group"
-                  aria-label="Select market feed mode"
-                  className="flex items-center gap-1 rounded-md border border-slate-800 bg-[#0F172A] p-1"
-                >
+          {/* Workspace Toolbar */}
+          <div className="flex flex-col gap-3 border-b border-slate-800 pb-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Symbol Selector */}
+              <div
+                role="group"
+                aria-label="Select trading symbol"
+                className="flex items-center gap-1 rounded-md border border-slate-800 bg-[#0F172A] p-1"
+              >
+                {SYMBOLS.map((sym) => (
                   <button
+                    key={sym}
                     type="button"
-                    onClick={() => handleChangeFeedMode('live')}
-                    className={`rounded px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
-                      feedMode === 'live'
-                        ? 'bg-emerald-500/20 text-emerald-300'
+                    onClick={() => handleSelectSymbol(sym)}
+                    className={`rounded px-2.5 py-1 text-xs font-mono font-medium transition-colors whitespace-nowrap shrink-0 ${
+                      symbol === sym
+                        ? 'bg-slate-800 text-sky-400'
                         : 'text-slate-400 hover:text-slate-200'
                     }`}
                   >
-                    Live Real-Time
+                    {sym}
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => handleChangeFeedMode('replay')}
-                    className={`rounded px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
-                      feedMode === 'replay'
-                        ? 'bg-slate-800 text-slate-100'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    Replay
-                  </button>
-                </div>
-
-                {/* Scenario Quick Selector (Replay mode only) */}
-                {feedMode === 'replay' && (
-                  <select
-                    aria-label="Select replay scenario"
-                    value={scenario}
-                    onChange={(e) =>
-                      handleChangeScenario(e.target.value as ReplayScenarioId)
-                    }
-                    className="h-8 rounded-md border border-slate-800 bg-[#0F172A] px-2.5 text-xs text-slate-300 focus:border-sky-400 focus:outline-none"
-                  >
-                    <option value="london_bullish_sweep">
-                      Scenario: London Bullish Sweep
-                    </option>
-                    <option value="ny_bearish_ote">
-                      Scenario: NY Bearish OTE
-                    </option>
-                    <option value="london_bos_continuation">
-                      Scenario: London BOS Continuation
-                    </option>
-                  </select>
-                )}
+                ))}
               </div>
 
-              {/* Chart Mode & SMC Overlay Toggles */}
-              <div className="flex flex-wrap items-center gap-3">
-                {chartMode === 'smc' && (
-                  <div className="flex flex-wrap items-center gap-3 text-xs text-slate-300">
-                    {(
-                      [
-                        ['fvg', 'FVG'],
-                        ['orderBlocks', 'Order Blocks'],
-                        ['structure', 'BOS / CHoCH'],
-                        ['liquidity', 'Sweeps'],
-                        ['dealingRange', 'OTE 62–79%'],
-                      ] as const
-                    ).map(([key, label]) => (
-                      <label
-                        key={key}
-                        className="inline-flex items-center gap-1.5 cursor-pointer select-none"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={overlays[key]}
-                          onChange={(e) =>
-                            setOverlays((prev) => ({
-                              ...prev,
-                              [key]: e.target.checked,
-                            }))
-                          }
-                          className="rounded border-slate-700 bg-[#0F172A] text-sky-400 focus:ring-sky-400"
-                        />
-                        <span className="whitespace-nowrap">{label}</span>
-                      </label>
-                    ))}
-                  </div>
-                )}
-
-                <div className="flex items-center gap-1 rounded-md border border-slate-800 bg-[#0F172A] p-1">
+              {/* Timeframe Selector */}
+              <div
+                role="group"
+                aria-label="Select entry timeframe"
+                className="flex items-center gap-1 rounded-md border border-slate-800 bg-[#0F172A] p-1"
+              >
+                {TIMEFRAMES.map((tf) => (
                   <button
+                    key={tf}
                     type="button"
-                    onClick={() => setChartMode('smc')}
-                    className={`rounded px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
-                      chartMode === 'smc'
+                    onClick={() => handleSelectTimeframe(tf)}
+                    className={`rounded px-2.5 py-1 text-xs font-mono font-medium transition-colors whitespace-nowrap shrink-0 ${
+                      timeframe === tf
                         ? 'bg-slate-800 text-slate-100'
                         : 'text-slate-400 hover:text-slate-200'
                     }`}
                   >
-                    SMC Canvas
+                    {tf}
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => setChartMode('tradingview')}
-                    className={`rounded px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
-                      chartMode === 'tradingview'
-                        ? 'bg-slate-800 text-slate-100'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    TradingView Widget
-                  </button>
-                </div>
+                ))}
               </div>
+
+              {/* Live Stream / Replay Segmented Switch */}
+              <div
+                role="group"
+                aria-label="Select market feed mode"
+                className="flex items-center gap-1 rounded-md border border-slate-800 bg-[#0F172A] p-1"
+              >
+                <button
+                  type="button"
+                  onClick={() => handleChangeFeedMode('live')}
+                  className={`rounded px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                    feedMode === 'live'
+                      ? 'bg-emerald-500/20 text-emerald-300'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Live Real-Time
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleChangeFeedMode('replay')}
+                  className={`rounded px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                    feedMode === 'replay'
+                      ? 'bg-slate-800 text-slate-100'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Replay
+                </button>
+              </div>
+
+              {/* Scenario Quick Selector (Replay mode only) */}
+              {feedMode === 'replay' && (
+                <select
+                  aria-label="Select replay scenario"
+                  value={scenario}
+                  onChange={(e) =>
+                    handleChangeScenario(e.target.value as ReplayScenarioId)
+                  }
+                  className="h-8 rounded-md border border-slate-800 bg-[#0F172A] px-2.5 text-xs text-slate-300 focus:border-sky-400 focus:outline-none"
+                >
+                  <option value="london_bullish_sweep">
+                    Scenario: London Bullish Sweep
+                  </option>
+                  <option value="ny_bearish_ote">
+                    Scenario: NY Bearish OTE
+                  </option>
+                  <option value="london_bos_continuation">
+                    Scenario: London BOS Continuation
+                  </option>
+                </select>
+              )}
             </div>
 
-            {feedWarning && (
-              <div className="rounded-md border border-amber-500/40 bg-amber-950/30 px-4 py-2.5 text-xs text-amber-200">
-                {feedWarning}
-              </div>
-            )}
+            {/* Chart Mode & SMC Overlay Toggles */}
+            <div className="flex flex-wrap items-center gap-3">
+              {chartMode === 'smc' && (
+                <div className="flex flex-wrap items-center gap-3 text-xs text-slate-300">
+                  {(
+                    [
+                      ['fvg', 'FVG'],
+                      ['orderBlocks', 'Order Blocks'],
+                      ['structure', 'BOS / CHoCH'],
+                      ['liquidity', 'Sweeps'],
+                      ['dealingRange', 'OTE 62–79%'],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <label
+                      key={key}
+                      className="inline-flex items-center gap-1.5 cursor-pointer select-none"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={overlays[key]}
+                        onChange={(e) =>
+                          setOverlays((prev) => ({
+                            ...prev,
+                            [key]: e.target.checked,
+                          }))
+                        }
+                        className="rounded border-slate-700 bg-[#0F172A] text-sky-400 focus:ring-sky-400"
+                      />
+                      <span className="whitespace-nowrap">{label}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
 
-            {/* Multi-Timeframe Confluence Strip */}
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-              <div className="rounded-md border border-slate-800 bg-[#0F172A]/70 px-4 py-3">
-                <p className="text-xs text-slate-400">HTF Bias (4H / Daily)</p>
-                <p
-                  data-testid="htf-bias"
-                  className={`mt-1 font-display text-base font-semibold capitalize ${
-                    htfBias === 'bullish'
-                      ? 'text-emerald-400'
-                      : htfBias === 'bearish'
-                      ? 'text-rose-400'
-                      : 'text-slate-300'
+              <div className="flex items-center gap-1 rounded-md border border-slate-800 bg-[#0F172A] p-1">
+                <button
+                  type="button"
+                  onClick={() => setChartMode('smc')}
+                  className={`rounded px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                    chartMode === 'smc'
+                      ? 'bg-slate-800 text-slate-100'
+                      : 'text-slate-400 hover:text-slate-200'
                   }`}
                 >
-                  {htfBias}
-                </p>
-              </div>
-
-              <div className="rounded-md border border-slate-800 bg-[#0F172A]/70 px-4 py-3">
-                <p className="text-xs text-slate-400">MTF Structure (1H)</p>
-                <p
-                  className={`mt-1 font-display text-base font-semibold capitalize ${
-                    mtfStructure === 'bullish'
-                      ? 'text-emerald-400'
-                      : mtfStructure === 'bearish'
-                      ? 'text-rose-400'
-                      : 'text-slate-300'
+                  SMC Canvas
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setChartMode('tradingview')}
+                  className={`rounded px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                    chartMode === 'tradingview'
+                      ? 'bg-slate-800 text-slate-100'
+                      : 'text-slate-400 hover:text-slate-200'
                   }`}
                 >
-                  {mtfStructure}
-                </p>
-              </div>
-
-              <div className="rounded-md border border-slate-800 bg-[#0F172A]/70 px-4 py-3">
-                <p className="text-xs text-slate-400">Active Killzone (UTC)</p>
-                <p
-                  className={`mt-1 font-display text-base font-semibold ${
-                    ltfAnalysis.killzone.inKillzone
-                      ? 'text-sky-400'
-                      : 'text-slate-300'
-                  }`}
-                >
-                  {ltfAnalysis.killzone.label}
-                </p>
-              </div>
-
-              <div className="rounded-md border border-slate-800 bg-[#0F172A]/70 px-4 py-3">
-                <p className="text-xs text-slate-400">Dealing Range</p>
-                <p className="mt-1 font-display text-base font-semibold capitalize text-slate-100">
-                  {ltfAnalysis.dealingRange
-                    ? `${ltfAnalysis.dealingRange.zone} · ${ltfAnalysis.dealingRange.retracementPct.toFixed(
-                        0
-                      )}%`
-                    : 'Calculating'}
-                </p>
+                  TradingView Widget
+                </button>
               </div>
             </div>
+          </div>
 
-            {/* Primary 2-Column Workspace: Chart + AI Setup Panel */}
-            <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-12">
-              <div className="space-y-3 lg:col-span-8">
-                {chartMode === 'smc' ? (
-                  <SMCCandleChart
-                    symbol={symbol}
-                    candles={ltfCandles}
-                    formingCandle={formingCandle}
-                    liveQuote={liveQuote}
-                    isLiveStream={feedMode === 'live' && streamConnected}
-                    lastTickTime={lastTickTime}
-                    analysis={ltfAnalysis}
-                    setup={setup}
-                    overlays={overlays}
-                  />
-                ) : (
-                  <TradingViewEmbed symbol={symbol} timeframe={timeframe} />
-                )}
+          {feedWarning && (
+            <div className="rounded-md border border-amber-500/40 bg-amber-950/30 px-4 py-2.5 text-xs text-amber-200">
+              {feedWarning}
+            </div>
+          )}
 
-                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400 px-1">
-                  <span>
-                    {SYMBOL_BASE_CONFIG[symbol].label} · Feed: {feedProvider}
-                  </span>
-                  <span className="font-mono tabular-nums text-slate-300">
-                    Active Zones: {activeFvgs} Unmitigated FVG · {activeObs} Order Blocks · {recentSweeps} Sweeps
-                  </span>
-                </div>
-              </div>
+          {/* Multi-Timeframe Confluence Strip */}
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <div className="rounded-md border border-slate-800 bg-[#0F172A]/70 px-4 py-3">
+              <p className="text-xs text-slate-400">HTF Bias (4H / Daily)</p>
+              <p
+                data-testid="htf-bias"
+                className={`mt-1 font-display text-base font-semibold capitalize ${
+                  htfBias === 'bullish'
+                    ? 'text-emerald-400'
+                    : htfBias === 'bearish'
+                    ? 'text-rose-400'
+                    : 'text-slate-300'
+                }`}
+              >
+                {htfBias}
+              </p>
+            </div>
 
-              <div className="lg:col-span-4">
-                <AISetupPanel
+            <div className="rounded-md border border-slate-800 bg-[#0F172A]/70 px-4 py-3">
+              <p className="text-xs text-slate-400">MTF Structure (1H)</p>
+              <p
+                className={`mt-1 font-display text-base font-semibold capitalize ${
+                  mtfStructure === 'bullish'
+                    ? 'text-emerald-400'
+                    : mtfStructure === 'bearish'
+                    ? 'text-rose-400'
+                    : 'text-slate-300'
+                }`}
+              >
+                {mtfStructure}
+              </p>
+            </div>
+
+            <div className="rounded-md border border-slate-800 bg-[#0F172A]/70 px-4 py-3">
+              <p className="text-xs text-slate-400">Active Killzone (UTC)</p>
+              <p
+                className={`mt-1 font-display text-base font-semibold ${
+                  ltfAnalysis.killzone.inKillzone
+                    ? 'text-sky-400'
+                    : 'text-slate-300'
+                }`}
+              >
+                {ltfAnalysis.killzone.label}
+              </p>
+            </div>
+
+            <div className="rounded-md border border-slate-800 bg-[#0F172A]/70 px-4 py-3">
+              <p className="text-xs text-slate-400">Dealing Range</p>
+              <p className="mt-1 font-display text-base font-semibold capitalize text-slate-100">
+                {ltfAnalysis.dealingRange
+                  ? `${ltfAnalysis.dealingRange.zone} · ${ltfAnalysis.dealingRange.retracementPct.toFixed(
+                      0
+                    )}%`
+                  : 'Calculating'}
+              </p>
+            </div>
+          </div>
+
+          {/* Primary 2-Column Workspace: Chart + AI Setup Panel */}
+          <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-12">
+            <div className="space-y-3 lg:col-span-8">
+              {chartMode === 'smc' ? (
+                <SMCCandleChart
+                  symbol={symbol}
+                  candles={ltfCandles}
+                  formingCandle={formingCandle}
+                  liveQuote={liveQuote}
+                  isLiveStream={feedMode === 'live' && streamConnected}
+                  lastTickTime={lastTickTime}
+                  analysis={ltfAnalysis}
                   setup={setup}
-                  aiResult={aiResult}
-                  aiError={aiError}
-                  isAnalyzing={isAnalyzing}
-                  language={language}
-                  onChangeLanguage={setLanguage}
-                  csnrRule={csnrRule}
-                  onChangeCsnrRule={setCsnrRule}
-                  newsRisk={newsRisk}
-                  onChangeNewsRisk={setNewsRisk}
-                  onRunAIAnalysis={handleRunAIAnalysis}
-                  onSaveSignal={handleSaveSignal}
-                  riskSettings={riskSettings}
-                  existingSignals={signals}
+                  overlays={overlays}
                 />
+              ) : (
+                <TradingViewEmbed symbol={symbol} timeframe={timeframe} />
+              )}
+
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400 px-1">
+                <span>
+                  {SYMBOL_BASE_CONFIG[symbol].label} · Feed: {feedProvider}
+                </span>
+                <span className="font-mono tabular-nums text-slate-300">
+                  Active Zones: {activeFvgs} Unmitigated FVG · {activeObs} Order Blocks · {recentSweeps} Sweeps
+                </span>
               </div>
             </div>
 
-            {/* Signal Ledger */}
-            <SignalLogTable
-              signals={signals}
-              onUpdateStatus={handleUpdateSignalStatus}
-              onDeleteSignal={handleDeleteSignal}
-              onInspectSignal={handleInspectSignal}
-            />
+            <div className="lg:col-span-4">
+              <AISetupPanel
+                setup={setup}
+                aiResult={aiResult}
+                aiError={aiError}
+                isAnalyzing={isAnalyzing}
+                language={language}
+                onChangeLanguage={setLanguage}
+                csnrRule={csnrRule}
+                onChangeCsnrRule={setCsnrRule}
+                newsRisk={newsRisk}
+                onChangeNewsRisk={setNewsRisk}
+                onRunAIAnalysis={handleRunAIAnalysis}
+                onSaveSignal={handleSaveSignal}
+                riskSettings={riskSettings}
+                existingSignals={signals}
+              />
+            </div>
+          </div>
+
+          {/* Signal Ledger */}
+          <SignalLogTable
+            signals={signals}
+            onUpdateStatus={handleUpdateSignalStatus}
+            onDeleteSignal={handleDeleteSignal}
+            onInspectSignal={handleInspectSignal}
+          />
         </div>
 
         {activeTab === 'feed' && (
@@ -805,5 +820,38 @@ export default function App() {
         )}
       </main>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <BrowserRouter>
+        <div className="min-h-screen bg-[#050807] text-slate-100 flex flex-col">
+          <Navbar />
+          <VisitTracker />
+          <div className="flex-1">
+            <Routes>
+              <Route path="/" element={<Home />} />
+              <Route path="/home" element={<Home />} />
+              <Route path="/signal" element={<RequireAuth><WorkspaceView /></RequireAuth>} />
+              <Route path="/analyze" element={<RequireAuth><WorkspaceView /></RequireAuth>} />
+              <Route path="/about" element={<About />} />
+              <Route path="/login" element={<Login />} />
+              <Route path="/admin/login" element={<AdminLogin />} />
+              <Route
+                path="/admin"
+                element={
+                  <RequireAdmin>
+                    <Admin />
+                  </RequireAdmin>
+                }
+              />
+              <Route path="*" element={<Home />} />
+            </Routes>
+          </div>
+        </div>
+      </BrowserRouter>
+    </AuthProvider>
   );
 }
