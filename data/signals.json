@@ -1,0 +1,61 @@
+[
+  {
+    "id": "sig-XAUUSD-5m-1795595400",
+    "symbol": "XAUUSD",
+    "timeframe": "5m",
+    "direction": "long",
+    "entryPrice": 2648.93,
+    "stopLoss": 2645.14,
+    "takeProfit": 2660.66,
+    "rrRatio": 3.09,
+    "recommendedLots": 0.26,
+    "riskAmount": 100,
+    "aiGrade": "Rules-Only",
+    "aiScore": null,
+    "explanation": "Rules engine detected LONG ICT setup during London Killzone.",
+    "sessionLabel": "London Killzone",
+    "htfBias": "neutral",
+    "status": "Active",
+    "candleTime": 1795595400,
+    "createdAt": "2026-11-25T11:29:48.163Z",
+    "setupSnapshot": {
+      "id": "setup-XAUUSD-5m-1795595400",
+      "symbol": "XAUUSD",
+      "timeframe_entry": "5m",
+      "htf_bias": "neutral",
+      "mtf_structure": "bearish",
+      "session": "london_killzone",
+      "session_label": "London Killzone",
+      "direction": "long",
+      "candle_time": 1795595400,
+      "entry_price": 2648.93,
+      "stop_loss": 2645.14,
+      "take_profit": 2660.66,
+      "setup": {
+        "sweep": "sell-side liquidity at 2649.89",
+        "choch": true,
+        "bos": false,
+        "fvg": {
+          "type": "bullish",
+          "range": [
+            2648.15,
+            2649.7
+          ]
+        },
+        "order_block": {
+          "type": "bullish",
+          "range": [
+            2645.44,
+            2647.19
+          ]
+        },
+        "in_discount": true,
+        "in_premium": false,
+        "in_ote": false,
+        "in_killzone": true,
+        "rr_estimate": 3.1
+      },
+      "recent_news_risk": "none"
+    }
+  }
+]
