@@ -2,7 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
-import { createServer as createViteServer } from 'vite';
+import { fileURLToPath } from 'url';
 import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
 import {
   generateInstitutionalDataset,
@@ -895,6 +895,53 @@ async function startServer() {
     }
   });
 
+  let hydrogenCooldownUntil = 0;
+
+  const isTransientGeminiError = (err: unknown): boolean => {
+    const status =
+      typeof err === 'object' && err !== null && 'status' in err
+        ? Number((err as { status?: unknown }).status)
+        : NaN;
+    if ([429, 500, 502, 503, 504].includes(status)) return true;
+
+    const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+    return (
+      msg.includes('503') ||
+      msg.includes('502') ||
+      msg.includes('504') ||
+      msg.includes('429') ||
+      msg.includes('unavailable') ||
+      msg.includes('resource_exhausted') ||
+      msg.includes('deadline_exceeded') ||
+      msg.includes('high demand') ||
+      msg.includes('timed out') ||
+      msg.includes('timeout') ||
+      msg.includes('aborted') ||
+      msg.includes('fetch failed') ||
+      msg.includes('econnreset')
+    );
+  };
+
+  const withTimeout = async <T,>(
+    promise: Promise<T>,
+    timeoutMs: number,
+    label: string
+  ): Promise<T> => {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<T>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+          }, timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+
   app.post('/api/analyze-setup', async (req, res) => {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
@@ -927,6 +974,7 @@ async function startServer() {
       const ai = new GoogleGenAI({
         apiKey,
         httpOptions: {
+          timeout: 15000,
           headers: {
             'User-Agent': 'aistudio-build',
           },
@@ -990,127 +1038,163 @@ Assign a grade based on confluence count and quality:
 - When input.language is "km", provide 'explanation_km' in 2–3 clear sentences in Khmer (ភាសាខ្មែរ) keeping ICT terms (FVG, CHoCH, OB, BOS, OTE, CSNR) in English. When input.language is "en", set 'explanation_km' to "".
 - Always include a concise educational/non-financial-advice 'disclaimer'.`;
 
-      let response;
-      let usedModel = 'gemini-4-hydrogen';
+      const skipHydrogen = Date.now() < hydrogenCooldownUntil;
+      const modelsToTry: Array<{ model: string; useLowThinking: boolean; timeoutMs: number }> =
+        skipHydrogen
+          ? [
+              { model: 'gemini-3.1-flash-lite', useLowThinking: false, timeoutMs: 14000 },
+              { model: 'gemini-3.1-flash-lite', useLowThinking: false, timeoutMs: 14000 },
+              { model: 'gemini-3.1-flash-lite', useLowThinking: false, timeoutMs: 14000 },
+            ]
+          : [
+              { model: 'gemini-4-hydrogen', useLowThinking: true, timeoutMs: 9000 },
+              { model: 'gemini-3.1-flash-lite', useLowThinking: false, timeoutMs: 14000 },
+              { model: 'gemini-3.1-flash-lite', useLowThinking: false, timeoutMs: 14000 },
+              { model: 'gemini-3.1-flash-lite', useLowThinking: false, timeoutMs: 14000 },
+            ];
+
+      let parsed: Record<string, unknown> | null = null;
+      let usedModel = modelsToTry[0].model;
       let lastErr: unknown;
-      const modelsToTry: Array<{ model: string; useLowThinking: boolean }> = [
-        { model: 'gemini-4-hydrogen', useLowThinking: true },
-        { model: 'gemini-4-hydrogen', useLowThinking: true },
-        { model: 'gemini-3.1-flash-lite', useLowThinking: false },
-      ];
 
       for (let attempt = 0; attempt < modelsToTry.length; attempt++) {
         const current = modelsToTry[attempt];
         try {
           usedModel = current.model;
-          response = await ai.models.generateContent({
-            model: current.model,
-            contents: JSON.stringify(analystInput, null, 2),
-            config: {
-              systemInstruction,
-              ...(current.useLowThinking
-                ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
-                : {}),
-              responseMimeType: 'application/json',
-              responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                  grade: {
-                    type: Type.STRING,
-                    description: 'One of A, B, C, or reject',
+          const response = await withTimeout(
+            ai.models.generateContent({
+              model: current.model,
+              contents: JSON.stringify(analystInput, null, 2),
+              config: {
+                systemInstruction,
+                ...(current.useLowThinking
+                  ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+                  : {}),
+                responseMimeType: 'application/json',
+                responseSchema: {
+                  type: Type.OBJECT,
+                  properties: {
+                    grade: {
+                      type: Type.STRING,
+                      description: 'One of A, B, C, or reject',
+                    },
+                    score: {
+                      type: Type.INTEGER,
+                      description: 'Setup quality score from 0 to 100',
+                    },
+                    bias_alignment: {
+                      type: Type.STRING,
+                      description: 'One of aligned, conflicting, or neutral',
+                    },
+                    confluences: {
+                      type: Type.ARRAY,
+                      items: { type: Type.STRING },
+                      description: 'Short list of confirmed elements using only input data',
+                    },
+                    missing_elements: {
+                      type: Type.ARRAY,
+                      items: { type: Type.STRING },
+                      description: 'Elements required for a higher grade that are absent',
+                    },
+                    risks: {
+                      type: Type.ARRAY,
+                      items: { type: Type.STRING },
+                      description: 'Specific risks such as high-impact news, counter-trend, off-session, or low RR',
+                    },
+                    invalidation: {
+                      type: Type.STRING,
+                      description: 'The price level or condition from input that cancels this setup',
+                    },
+                    explanation_en: {
+                      type: Type.STRING,
+                      description: '2-3 sentences in English using only provided input levels',
+                    },
+                    explanation_km: {
+                      type: Type.STRING,
+                      description: '2-3 sentences in Khmer if language is km, or empty string if en',
+                    },
+                    disclaimer: {
+                      type: Type.STRING,
+                      description: 'Informational/educational disclaimer stating this is not financial advice',
+                    },
                   },
-                  score: {
-                    type: Type.INTEGER,
-                    description: 'Setup quality score from 0 to 100',
-                  },
-                  bias_alignment: {
-                    type: Type.STRING,
-                    description: 'One of aligned, conflicting, or neutral',
-                  },
-                  confluences: {
-                    type: Type.ARRAY,
-                    items: { type: Type.STRING },
-                    description: 'Short list of confirmed elements using only input data',
-                  },
-                  missing_elements: {
-                    type: Type.ARRAY,
-                    items: { type: Type.STRING },
-                    description: 'Elements required for a higher grade that are absent',
-                  },
-                  risks: {
-                    type: Type.ARRAY,
-                    items: { type: Type.STRING },
-                    description: 'Specific risks such as high-impact news, counter-trend, off-session, or low RR',
-                  },
-                  invalidation: {
-                    type: Type.STRING,
-                    description: 'The price level or condition from input that cancels this setup',
-                  },
-                  explanation_en: {
-                    type: Type.STRING,
-                    description: '2-3 sentences in English using only provided input levels',
-                  },
-                  explanation_km: {
-                    type: Type.STRING,
-                    description: '2-3 sentences in Khmer if language is km, or empty string if en',
-                  },
-                  disclaimer: {
-                    type: Type.STRING,
-                    description: 'Informational/educational disclaimer stating this is not financial advice',
-                  },
+                  required: [
+                    'grade',
+                    'score',
+                    'bias_alignment',
+                    'confluences',
+                    'missing_elements',
+                    'risks',
+                    'invalidation',
+                    'explanation_en',
+                    'explanation_km',
+                    'disclaimer',
+                  ],
                 },
-                required: [
-                  'grade',
-                  'score',
-                  'bias_alignment',
-                  'confluences',
-                  'missing_elements',
-                  'risks',
-                  'invalidation',
-                  'explanation_en',
-                  'explanation_km',
-                  'disclaimer',
-                ],
               },
-            },
-          });
+            }),
+            current.timeoutMs,
+            `Gemini (${current.model})`
+          );
+
+          const rawText = (response.text ?? '').trim();
+          if (!rawText) {
+            throw new Error(`Gemini (${current.model}) returned an empty response.`);
+          }
+
+          const cleanedJson = rawText
+            .replace(/^```json\s*/i, '')
+            .replace(/^```\s*/i, '')
+            .replace(/\s*```$/i, '')
+            .trim();
+          const firstBrace = cleanedJson.indexOf('{');
+          const lastBrace = cleanedJson.lastIndexOf('}');
+          const jsonSlice =
+            firstBrace !== -1 && lastBrace > firstBrace
+              ? cleanedJson.slice(firstBrace, lastBrace + 1)
+              : cleanedJson;
+
+          parsed = JSON.parse(jsonSlice) as Record<string, unknown>;
           break;
         } catch (err) {
           lastErr = err;
+          if (current.model === 'gemini-4-hydrogen' && isTransientGeminiError(err)) {
+            hydrogenCooldownUntil = Date.now() + 60_000;
+          }
+
           const msg = err instanceof Error ? err.message : String(err);
-          const isTransient = msg.includes('503') || msg.includes('UNAVAILABLE') || msg.includes('429');
-          if (!isTransient || attempt === modelsToTry.length - 1) {
+          const isRetryable =
+            isTransientGeminiError(err) ||
+            msg.includes('empty response') ||
+            err instanceof SyntaxError;
+
+          if (!isRetryable || attempt === modelsToTry.length - 1) {
             throw err;
           }
-          await new Promise((resolve) => setTimeout(resolve, 600 * Math.pow(2, attempt)));
+
+          const nextModel = modelsToTry[attempt + 1].model;
+          const delayMs =
+            nextModel !== current.model
+              ? 150
+              : Math.min(1800, 450 * Math.pow(2, attempt)) + Math.floor(Math.random() * 150);
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
         }
       }
 
-      if (!response) {
+      if (!parsed) {
         throw lastErr instanceof Error ? lastErr : new Error('Gemini request failed');
       }
 
-      const rawText = (response.text ?? '').trim();
-      if (!rawText) {
-        res.status(502).json({ error: 'Gemini returned an empty response.' });
-        return;
-      }
-
-      const cleanedJson = rawText
-        .replace(/^```json\s*/i, '')
-        .replace(/^```\s*/i, '')
-        .replace(/\s*```$/i, '')
-        .trim();
-
-      const parsed = JSON.parse(cleanedJson);
-      const normalizedGrade = ['A', 'B', 'C', 'reject'].includes(parsed.grade)
-        ? parsed.grade
-        : 'C';
-      const normalizedBiasAlignment = ['aligned', 'conflicting', 'neutral'].includes(
-        parsed.bias_alignment
-      )
-        ? parsed.bias_alignment
-        : 'neutral';
+      const rawGrade = String(parsed.grade ?? '');
+      const normalizedGrade: AIAnalysisResult['grade'] =
+        rawGrade === 'A' || rawGrade === 'B' || rawGrade === 'C' || rawGrade === 'reject'
+          ? rawGrade
+          : 'C';
+      const rawBias = String(parsed.bias_alignment ?? '');
+      const normalizedBiasAlignment: AIAnalysisResult['bias_alignment'] =
+        rawBias === 'aligned' || rawBias === 'conflicting' || rawBias === 'neutral'
+          ? rawBias
+          : 'neutral';
 
       const explanationEn = String(parsed.explanation_en || parsed.explanation || '');
       const explanationKm =
@@ -1157,7 +1241,14 @@ Assign a grade based on confluence count and quality:
         // Keep plain message
       }
       console.error('[analyze-setup] Error:', message);
-      res.status(503).json({ error: message });
+      const lower = message.toLowerCase();
+      const statusCode =
+        lower.includes('api_key_invalid') || lower.includes('permission_denied')
+          ? 403
+          : lower.includes('429') || lower.includes('resource_exhausted')
+          ? 429
+          : 503;
+      res.status(statusCode).json({ error: message });
     }
   });
 
@@ -1271,14 +1362,27 @@ Assign a grade based on confluence count and quality:
     }
   });
 
-  if (process.env.NODE_ENV !== 'production') {
+  const currentFile = fileURLToPath(import.meta.url);
+  const currentDir = path.dirname(currentFile);
+  const isCompiledServer = currentFile.endsWith('server.js');
+  const isProduction =
+    process.env.NODE_ENV === 'production' ||
+    Boolean(process.env.RAILWAY_ENVIRONMENT) ||
+    Boolean(process.env.RAILWAY_PUBLIC_DOMAIN) ||
+    isCompiledServer;
+
+  if (!isProduction) {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    const distDir = path.resolve(process.cwd(), 'dist');
+    const cwdDist = path.resolve(process.cwd(), 'dist');
+    const distDir = fs.existsSync(path.join(cwdDist, 'index.html'))
+      ? cwdDist
+      : path.resolve(currentDir, 'dist');
     app.use(express.static(distDir));
     app.get('*', (_req, res) => {
       res.sendFile(path.join(distDir, 'index.html'));
@@ -1286,8 +1390,11 @@ Assign a grade based on confluence count and quality:
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`StructureDesk server listening on http://localhost:${PORT}`);
+    console.log(`StructureDesk server listening on http://0.0.0.0:${PORT} (prod=${isProduction})`);
   });
 }
 
-startServer();
+startServer().catch((err) => {
+  console.error('Fatal server startup error:', err);
+  process.exit(1);
+});

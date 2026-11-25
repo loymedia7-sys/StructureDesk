@@ -355,15 +355,24 @@ export default function App() {
   }, [symbol, timeframe, htfCandles, mtfCandles, ltfCandles]);
 
   const handleRunAIAnalysis = async () => {
-    if (!evaluation.setup) return;
     setActiveTab('desk');
+    if (!evaluation.setup) {
+      setAiError(
+        'No active ICT setup detected on the current closed candles. Switch timeframe, replay scenario, or wait for the next candle close.'
+      );
+      return;
+    }
     setIsAnalyzing(true);
     setAiError(null);
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 35000);
 
     try {
       const res = await fetch('/api/analyze-setup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           setup: evaluation.setup,
           language,
@@ -371,16 +380,40 @@ export default function App() {
           newsRisk,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'AI grading request failed.');
+
+      const rawBody = await res.text();
+      let data: Record<string, unknown> | null = null;
+      if (rawBody) {
+        try {
+          data = JSON.parse(rawBody) as Record<string, unknown>;
+        } catch {
+          // Non-JSON response (e.g. proxy timeout HTML page)
+        }
       }
-      setAiResult(data as AIAnalysisResult);
+
+      if (!res.ok) {
+        const serverErr =
+          data && typeof data.error === 'string' && data.error.trim()
+            ? data.error
+            : `AI grading failed (HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''}). Please retry.`;
+        throw new Error(serverErr);
+      }
+
+      if (!data) {
+        throw new Error('AI service returned an empty or invalid response. Please retry.');
+      }
+
+      setAiResult(data as unknown as AIAnalysisResult);
     } catch (err) {
-      setAiError(
-        err instanceof Error ? err.message : 'Unable to reach AI analysis service.'
-      );
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        setAiError('AI analysis timed out after 35 seconds. Please click Retry AI Grading.');
+      } else {
+        setAiError(
+          err instanceof Error ? err.message : 'Unable to reach AI analysis service.'
+        );
+      }
     } finally {
+      window.clearTimeout(timeoutId);
       setIsAnalyzing(false);
     }
   };

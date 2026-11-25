@@ -55,6 +55,11 @@ export const AISetupPanel: React.FC<AISetupPanelProps> = ({
         <p className="text-xs leading-relaxed text-slate-400">
           No aligned multi-timeframe setup is active on the current closed candle. Switch replay scenarios, adjust the timeframe, or inspect the Market Feed tab.
         </p>
+        {aiError && (
+          <div className="rounded border border-rose-500/40 bg-rose-950/30 p-3 text-xs text-rose-200">
+            {aiError}
+          </div>
+        )}
       </div>
     );
   }
@@ -417,11 +422,22 @@ export const AISetupPanel: React.FC<AISetupPanelProps> = ({
                 {aiResult.explanation_en || aiResult.explanation}
               </p>
 
-              {(aiResult.explanation_km || aiResult.khmer_summary) && (
+              {(aiResult.explanation_km || aiResult.khmer_summary) ? (
                 <p className="border-t border-slate-800/80 pt-2 text-xs leading-relaxed text-sky-200">
                   {aiResult.explanation_km || aiResult.khmer_summary}
                 </p>
-              )}
+              ) : language === 'km' ? (
+                <div className="border-t border-slate-800/80 pt-2 flex items-center justify-between gap-2 text-[11px] text-slate-400">
+                  <span>Khmer translation not yet generated for this grade.</span>
+                  <button
+                    type="button"
+                    onClick={onRunAIAnalysis}
+                    className="font-medium text-sky-400 underline hover:text-sky-300 whitespace-nowrap"
+                  >
+                    Generate Khmer
+                  </button>
+                </div>
+              ) : null}
 
               {aiResult.confluences.length > 0 && (
                 <div className="text-[11px]">
