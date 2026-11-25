@@ -32,9 +32,10 @@ export const TopBar: React.FC<TopBarProps> = ({
             e.preventDefault();
             onSelectTab('desk');
           }}
-          className="font-display text-lg font-bold tracking-tight text-slate-100 whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 rounded"
+          className="flex items-center gap-2.5 font-display text-lg font-bold tracking-tight text-slate-100 whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 rounded"
         >
-          StructureDesk
+          <img src="/logo.png" alt="StructureDesk Logo" className="h-7 w-auto object-contain" />
+          <span>StructureDesk</span>
         </a>
 
         {/* Zone 2: Clean single-line navigation links */}
