@@ -574,7 +574,7 @@ async function startServer() {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
 
-  app.get('/api/health', (_req, res) => {
+  app.get(['/api/health', '/health'], (_req, res) => {
     res.json({
       ok: true,
       hasGeminiKey: Boolean(process.env.GEMINI_API_KEY),
@@ -1389,8 +1389,8 @@ Assign a grade based on confluence count and quality:
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`StructureDesk server listening on http://0.0.0.0:${PORT} (prod=${isProduction})`);
+  app.listen(PORT, () => {
+    console.log(`StructureDesk server listening on port ${PORT} (prod=${isProduction})`);
   });
 }
 
