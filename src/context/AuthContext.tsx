@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { onAuthStateChanged, signInWithPopup, signInWithEmailAndPassword, signOut, type User } from "firebase/auth";
-import { doc, setDoc, serverTimestamp, increment } from "firebase/firestore";
+import { doc, getDoc, setDoc, addDoc, collection, serverTimestamp, increment } from "firebase/firestore";
 import { auth, db, googleProvider, ADMIN_EMAIL } from "../lib/firebase";
 
 interface AuthContextType {
@@ -29,11 +29,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const loginWithGoogle = async () => {
-    await signInWithPopup(auth, googleProvider);
+    const cred = await signInWithPopup(auth, googleProvider);
+    if (cred.user) {
+      await saveProfile(cred.user);
+    }
   };
 
   const loginWithEmail = async (email: string, pass: string) => {
-    await signInWithEmailAndPassword(auth, email, pass);
+    const cred = await signInWithEmailAndPassword(auth, email, pass);
+    if (cred.user) {
+      await saveProfile(cred.user);
+    }
   };
 
   const logout = async () => {
@@ -51,20 +57,47 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 async function saveProfile(u: User) {
   try {
-    await setDoc(
-      doc(db, "users", u.uid),
-      {
+    const userRef = doc(db, "users", u.uid);
+    const snap = await getDoc(userRef);
+
+    if (!snap.exists()) {
+      await setDoc(userRef, {
         uid: u.uid,
         name: u.displayName || u.email?.split("@")[0] || "Trader",
         email: u.email || "",
         photo: u.photoURL || "",
+        status: "active",
+        subscriptionPlan: "free",
+        tokenBalance: 500,
+        loginCount: 1,
         lastLogin: serverTimestamp(),
-        loginCount: increment(1),
-      },
-      { merge: true }
-    );
-  } catch {
-    // offline or permissions fallback
+        createdAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(
+        userRef,
+        {
+          name: u.displayName || snap.data()?.name || "Trader",
+          email: u.email || "",
+          photo: u.photoURL || snap.data()?.photo || "",
+          lastLogin: serverTimestamp(),
+          loginCount: increment(1),
+        },
+        { merge: true }
+      );
+    }
+
+    // Record login event in events collection for real-time dashboard telemetry
+    await addDoc(collection(db, "events"), {
+      type: "login",
+      uid: u.uid,
+      email: u.email || "",
+      name: u.displayName || "Trader",
+      path: window.location.pathname,
+      createdAt: serverTimestamp(),
+    });
+  } catch (err) {
+    console.error("Error saving user profile to Firestore:", err);
   }
 }
 

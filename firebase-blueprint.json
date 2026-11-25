@@ -1,0 +1,118 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "StructureDesk registered user profile and account state",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "photo": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "suspended"] },
+        "subscriptionPlan": { "type": "string", "enum": ["free", "pro", "premium"] },
+        "tokenBalance": { "type": "number" },
+        "loginCount": { "type": "number" },
+        "lastLogin": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["uid", "email"]
+    },
+    "Event": {
+      "title": "Event",
+      "description": "Platform activity event for visits, logins, and AI analyses",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string" },
+        "uid": { "type": "string" },
+        "path": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["type"]
+    },
+    "TokenTransaction": {
+      "title": "TokenTransaction",
+      "description": "Ledger of AI token credits and debits",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "type": { "type": "string", "enum": ["credit", "debit"] },
+        "amount": { "type": "number" },
+        "balanceBefore": { "type": "number" },
+        "balanceAfter": { "type": "number" },
+        "reason": { "type": "string" },
+        "adminId": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["uid", "type", "amount"]
+    },
+    "Announcement": {
+      "title": "Announcement",
+      "description": "Platform announcement created by admin",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "type": { "type": "string", "enum": ["info", "success", "warning"] },
+        "status": { "type": "string", "enum": ["published", "draft"] },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["title", "description", "status"]
+    },
+    "Payment": {
+      "title": "Payment",
+      "description": "Subscription payment transaction record",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "plan": { "type": "string" },
+        "amount": { "type": "number" },
+        "method": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["uid", "amount", "status"]
+    },
+    "AdminActivityLog": {
+      "title": "AdminActivityLog",
+      "description": "Audit record of actions performed by administrators",
+      "type": "object",
+      "properties": {
+        "adminId": { "type": "string" },
+        "action": { "type": "string" },
+        "target": { "type": "string" },
+        "description": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["adminId", "action"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User profile and subscription state"
+    },
+    "/events/{eventId}": {
+      "schema": { "$ref": "#/entities/Event" },
+      "description": "Platform telemetry and activity logs"
+    },
+    "/tokenTransactions/{txId}": {
+      "schema": { "$ref": "#/entities/TokenTransaction" },
+      "description": "AI Token audit ledger"
+    },
+    "/announcements/{announcementId}": {
+      "schema": { "$ref": "#/entities/Announcement" },
+      "description": "Public and user announcements"
+    },
+    "/payments/{paymentId}": {
+      "schema": { "$ref": "#/entities/Payment" },
+      "description": "Payment records"
+    },
+    "/adminActivityLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AdminActivityLog" },
+      "description": "Admin actions audit log"
+    }
+  }
+}

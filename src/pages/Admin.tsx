@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   collection,
   getDocs,
+  onSnapshot,
   doc,
   setDoc,
   updateDoc,
@@ -77,8 +78,12 @@ interface UserDoc {
 }
 
 interface EventDoc {
+  id?: string;
   type: string;
   uid?: string;
+  email?: string;
+  name?: string;
+  path?: string;
   createdAt?: any;
 }
 
@@ -164,7 +169,7 @@ export default function Admin() {
       setUsers(usSnap.docs.map((d) => ({ uid: d.id, ...(d.data() as any) } as UserDoc)));
 
       const evSnap = await getDocs(query(collection(db, "events"), orderBy("createdAt", "desc")));
-      setEvents(evSnap.docs.map((d) => d.data() as EventDoc));
+      setEvents(evSnap.docs.map((d) => ({ id: d.id, ...d.data() } as EventDoc)));
 
       const annSnap = await getDocs(query(collection(db, "announcements"), orderBy("createdAt", "desc")));
       setAnnouncements(annSnap.docs.map((d) => ({ id: d.id, ...d.data() } as AnnouncementDoc)));
@@ -184,8 +189,70 @@ export default function Admin() {
     }
   };
 
+  // Real-time Firestore sync listeners
   useEffect(() => {
-    fetchData();
+    setLoading(true);
+
+    const unsubUsers = onSnapshot(
+      collection(db, "users"),
+      (snap) => {
+        setUsers(snap.docs.map((d) => ({ uid: d.id, ...(d.data() as any) } as UserDoc)));
+        setLoading(false);
+      },
+      (err) => {
+        console.error("Realtime users listener error:", err);
+        setLoading(false);
+      }
+    );
+
+    const unsubEvents = onSnapshot(
+      query(collection(db, "events"), orderBy("createdAt", "desc")),
+      (snap) => {
+        setEvents(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) } as EventDoc)));
+      },
+      (err) => console.error("Realtime events listener error:", err)
+    );
+
+    const unsubAnnouncements = onSnapshot(
+      query(collection(db, "announcements"), orderBy("createdAt", "desc")),
+      (snap) => {
+        setAnnouncements(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) } as AnnouncementDoc)));
+      },
+      (err) => console.error("Realtime announcements listener error:", err)
+    );
+
+    const unsubTokenTxs = onSnapshot(
+      query(collection(db, "tokenTransactions"), orderBy("createdAt", "desc")),
+      (snap) => {
+        setTokenTxs(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) } as TokenTxDoc)));
+      },
+      (err) => console.error("Realtime token transactions listener error:", err)
+    );
+
+    const unsubPayments = onSnapshot(
+      query(collection(db, "payments"), orderBy("createdAt", "desc")),
+      (snap) => {
+        setPayments(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) } as PaymentDoc)));
+      },
+      (err) => console.error("Realtime payments listener error:", err)
+    );
+
+    const unsubLogs = onSnapshot(
+      query(collection(db, "adminActivityLogs"), orderBy("createdAt", "desc")),
+      (snap) => {
+        setLogs(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) } as LogDoc)));
+      },
+      (err) => console.error("Realtime admin logs listener error:", err)
+    );
+
+    return () => {
+      unsubUsers();
+      unsubEvents();
+      unsubAnnouncements();
+      unsubTokenTxs();
+      unsubPayments();
+      unsubLogs();
+    };
   }, []);
 
   // Log admin action helper
@@ -475,12 +542,16 @@ export default function Admin() {
             </h1>
           </div>
           <div className="flex items-center gap-3">
+            <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#16D66B]/10 border border-[#16D66B]/30 text-[#16D66B] text-xs font-mono">
+              <span className="h-2 w-2 rounded-full bg-[#16D66B] animate-ping" />
+              Real-Time Firestore Sync
+            </div>
             <button
               onClick={fetchData}
               className="flex items-center gap-1.5 rounded-xl bg-[#101813] border border-emerald-900/40 px-3 py-2 text-xs font-medium text-[#16D66B] hover:bg-emerald-950/30 transition-all"
             >
               <RefreshCw className="h-3.5 w-3.5" />
-              <span>Refresh Data</span>
+              <span>Refresh</span>
             </button>
           </div>
         </header>
@@ -606,6 +677,45 @@ export default function Admin() {
                       ))}
                     </tbody>
                   </table>
+                </div>
+              </div>
+
+              {/* Real-time Activity Feed */}
+              <div className="rounded-2xl border border-emerald-900/30 bg-[#101813] p-6 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-display text-sm font-bold text-white flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full bg-[#16D66B] animate-pulse" />
+                    Live Platform Activity Stream (Real-Time)
+                  </h3>
+                  <span className="text-[11px] font-mono text-[#8B9990]">{events.length} total events recorded</span>
+                </div>
+                <div className="space-y-2.5 max-h-64 overflow-y-auto pr-1">
+                  {events.length === 0 ? (
+                    <p className="text-xs text-[#8B9990] py-3 text-center">No platform events yet. User logins and visits will stream here live.</p>
+                  ) : (
+                    events.slice(0, 10).map((ev, idx) => (
+                      <div key={ev.id || idx} className="flex items-center justify-between p-3 rounded-xl bg-[#0A100D] border border-emerald-900/20 text-xs">
+                        <div className="flex items-center gap-2.5">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase ${
+                            ev.type === "login"
+                              ? "bg-[#16D66B]/20 text-[#16D66B] border border-[#16D66B]/40"
+                              : ev.type === "analysis"
+                              ? "bg-sky-500/20 text-sky-400 border border-sky-500/40"
+                              : "bg-slate-800 text-slate-300"
+                          }`}>
+                            {ev.type}
+                          </span>
+                          <span className="text-white font-medium">
+                            {ev.email || ev.name || (ev.uid ? `User (${ev.uid.slice(0, 8)}...)` : "Visitor")}
+                          </span>
+                          {ev.path && <span className="text-[#8B9990] text-[11px] font-mono">at {ev.path}</span>}
+                        </div>
+                        <span className="text-[11px] font-mono text-[#8B9990]">
+                          {ev.createdAt?.toDate ? ev.createdAt.toDate().toLocaleTimeString() : "Just now"}
+                        </span>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
             </div>
