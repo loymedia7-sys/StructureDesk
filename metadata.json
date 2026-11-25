@@ -2,5 +2,7 @@
   "name": "StructureDesk",
   "description": "Forex ICT & Smart Money Concepts signal workstation with deterministic rules engine, multi-timeframe structure detection, Gemini AI setup grading, and historical backtesting.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }
